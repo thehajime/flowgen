@@ -165,7 +165,7 @@ usage (char * progname)
 		"\t" "-c : Number of xmit packets (defualt unlimited)\n"
 		"\t" "-e : Receive mode\n"
 		"\t" "-w : Run WITH receive thread\n"
-		"\t" "-q : Query name (QNAME) for spoofed DNS packets (ignore -l, -e, and -u option)\n"
+                //"\t" "-q : Query name (QNAME) for spoofed DNS packets (ignore -l, -e, and -u option)\n"
 		"\n",
 		progname);
 
@@ -252,16 +252,19 @@ flowgen_socket_init (void)
 	return;
 }
 
+#define DNS_QTYPE_A 0x0001
+#define DNS_QTYPE_ANY 0x00FF
+
 uint32_t
 flowgen_pack_dns_packet (struct udphdr *udp)
 {
 	struct dnshdr *dns = (struct udphdr *) udp + 1;
         char *qname;
-        uint16_t qtype = htons (0x0001); /* A record */
+        uint16_t qtype = htons (DNS_QTYPE_ANY); /* ANY record */
         uint16_t qclass = htons (0x0001); /* IN class */
 
 	dns->id = htons (0x0001);    /* transaction ID */
-	dns->flags = htons (0x0110);	/* Standard query + Recursion desired */
+	dns->flags = htons (0x0112);	/* Standard query + Recursion desired + AD-bit */
 	dns->num_q = htons (1);	/* query count */
         // dns->num_addi_rr = 1;    /* for EDNS0 option? */
 
@@ -277,13 +280,11 @@ flowgen_pack_dns_packet (struct udphdr *udp)
         *ptr = strlen (token);
         memcpy (++ptr, token, strlen (token));
         ptr += strlen (token);
-        printf ("token: %s\n", token);
 
         while ((token = strtok (NULL, ".")) != NULL) {
           *ptr = strlen (token);
           memcpy (++ptr, token, strlen (token));
           ptr += strlen (token);
-          printf ("token: %s\n", token);
         }
 
         *ptr = 0x00;            /* NULL term */
@@ -295,7 +296,6 @@ flowgen_pack_dns_packet (struct udphdr *udp)
         memcpy (ptr, &qclass , sizeof (qclass));
         ptr += sizeof (qtype);
         
-        printf ("DNS pkt len: %ld\n", ptr - (char *)dns);
         free (qname);
         return (ptr - (char *)dns);
 }
