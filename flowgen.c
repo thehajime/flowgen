@@ -35,6 +35,16 @@
 #define uh_sum check
 #endif /* linux */
 
+/* For DNS packet */
+struct dnshdr
+{
+    uint16_t id;             /* DNS packet ID */
+    uint16_t flags;          /* DNS flags */
+    uint16_t num_q;          /* Number of questions */
+    uint16_t num_answ_rr;    /* Number of answer resource records */
+    uint16_t num_auth_rr;    /* Number of authority resource records */
+    uint16_t num_addi_rr;    /* Number of additional resource records */
+};
 
 #define DSTPORT		49152
 #define SRCPORT_START	49153
@@ -42,6 +52,7 @@
 #define FLOW_MAX	256
 #define PORTLISTLEN	4096
 #define PACKETMAXLEN	8192
+#define QNAMELEN_MAX	512
 
 enum {
 	FLOWDIST_SAME,
@@ -92,6 +103,7 @@ struct flowgen {
 	int	randomized;		/* randomize source port ? */
 	int	count;			/* number of xmit packets */
 	int	udp_mode;		/* udp socket instead of raw socket */
+	char*	spoofed_dns;		/* send spoofed DNS packet on raw socket (ignore udp_mode) */
 	int	verbose;		/* verbose mode */
 
 } flowgen;
@@ -153,6 +165,7 @@ usage (char * progname)
 		"\t" "-c : Number of xmit packets (defualt unlimited)\n"
 		"\t" "-e : Receive mode\n"
 		"\t" "-w : Run WITH receive thread\n"
+		"\t" "-q : Query name (QNAME) for spoofed DNS packets (ignore -l, -e, and -u option)\n"
 		"\n",
 		progname);
 
@@ -239,6 +252,54 @@ flowgen_socket_init (void)
 	return;
 }
 
+uint32_t
+flowgen_pack_dns_packet (struct udphdr *udp)
+{
+	struct dnshdr *dns = (struct udphdr *) udp + 1;
+        char *qname;
+        uint16_t qtype = htons (0x0001); /* A record */
+        uint16_t qclass = htons (0x0001); /* IN class */
+
+	dns->id = htons (0x0001);    /* transaction ID */
+	dns->flags = htons (0x0110);	/* Standard query + Recursion desired */
+	dns->num_q = htons (1);	/* query count */
+        // dns->num_addi_rr = 1;    /* for EDNS0 option? */
+
+	/* QNAME encoding */
+        qname = strdup (flowgen.spoofed_dns);
+        char *ptr = (struct dnshdr *) dns + 1;
+        char *token = strtok (qname, ".");
+
+        if (!token) {
+          D ("qname error");
+        }
+
+        *ptr = strlen (token);
+        memcpy (++ptr, token, strlen (token));
+        ptr += strlen (token);
+        printf ("token: %s\n", token);
+
+        while ((token = strtok (NULL, ".")) != NULL) {
+          *ptr = strlen (token);
+          memcpy (++ptr, token, strlen (token));
+          ptr += strlen (token);
+          printf ("token: %s\n", token);
+        }
+
+        *ptr = 0x00;            /* NULL term */
+        ptr++;
+
+        /* QTYPE and QCLASS */
+        memcpy (ptr, &qtype , sizeof (qtype));
+        ptr += sizeof (qtype);
+        memcpy (ptr, &qclass , sizeof (qclass));
+        ptr += sizeof (qtype);
+        
+        printf ("DNS pkt len: %ld\n", ptr - (char *)dns);
+        free (qname);
+        return (ptr - (char *)dns);
+}
+
 void
 flowgen_packet_init (void)
 {
@@ -265,10 +326,19 @@ flowgen_packet_init (void)
 	/* fill udp header */
 	udp = (struct udphdr *) (ip + 1);
 
-	udp->uh_dport	= htons (DSTPORT);
-	udp->uh_sport	= 0;	/* filled when xmitted */
-	udp->uh_ulen	= htons (flowgen.pkt_len - sizeof (*ip));
-	udp->uh_sum	= 0;	/* no checksum */
+	if (!flowgen.spoofed_dns) {
+		udp->uh_dport	= htons (DSTPORT);
+		udp->uh_sport	= 0;	/* filled when xmitted */
+		udp->uh_ulen	= htons (flowgen.pkt_len - sizeof (*ip));
+		udp->uh_sum	= 0;	/* no checksum */
+	} else {
+		udp->uh_dport	= htons (53);
+		udp->uh_sport	= 0;	/* filled when xmitted */
+		uint32_t dns_len = flowgen_pack_dns_packet (udp);
+                flowgen.pkt_len = sizeof (*ip) + sizeof (*udp) + dns_len;
+		udp->uh_ulen	= htons (sizeof (*udp) + dns_len);
+		udp->uh_sum	= 0;	/* no checksum */
+	}
 
 	return;
 };
@@ -589,7 +659,7 @@ main (int argc, char ** argv)
 
 	flowgen_default_value_init ();
 
-	while ((ch = getopt (argc, argv, "s:d:n:t:l:c:i:m:ewfhruv")) != -1) {
+	while ((ch = getopt (argc, argv, "s:d:n:t:l:c:i:m:q:ewfhruv")) != -1) {
 
 		switch (ch) {
 		case 's' :
@@ -662,6 +732,13 @@ main (int argc, char ** argv)
 			break;
 		case 'u' :
 			flowgen.udp_mode = 1;
+			break;
+		case 'q' :
+			if (strlen (optarg) > QNAMELEN_MAX) {
+				D ("QNAME len muse be shorter than %d ", QNAMELEN_MAX);
+				exit (1);
+			}
+			flowgen.spoofed_dns = optarg;
 			break;
 		case 'v' :
 			flowgen.verbose = 1;

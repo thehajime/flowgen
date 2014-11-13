@@ -36,12 +36,17 @@ make DCE=yes is defined for ns-3-dce use.
 		-c : Number of xmit packets (defualt unlimited)
 		-e : Receive mode
 		-w : Run WITH receive thread
+                -q : Query name (QNAME) for spoofed DNS packets (ignore -l, -e, and -u option)
+
 
 	 % sudo ./flowgen
 	 
 	 or 
 	 
 	 % sudo ./flowgen -s 172.16.15.10 -d 172.16.12.12 -n 30 -t power -l 1500 -r -f
+	 or 
+	 
+	 %  sudo ./flowgen -s 172.16.15.39 -d 172.16.12.12 -q www.google.com
 
 
 ## Todo
